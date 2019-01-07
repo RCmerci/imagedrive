@@ -158,11 +158,9 @@ impl DockerClient {
             .for_each(move |chunk| {
                 match chunk.stream_type {
                     shiplift::tty::StreamType::StdOut => {
-                        println!("out: {:?}", &chunk);
                         stdout_s.send(chunk.data).unwrap();
                     }
                     shiplift::tty::StreamType::StdErr => {
-                        println!("err: {:?}", &chunk);
                         stderr_s.send(chunk.data).unwrap();
                     }
                     _ => panic!(""),
