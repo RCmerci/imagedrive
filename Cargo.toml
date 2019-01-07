@@ -1,0 +1,9 @@
+[package]
+name = "imagedrive"
+version = "0.1.0"
+authors = ["root"]
+edition = "2018"
+
+[dependencies]
+db = { path = "db" }
+dockerclient = { path = "dockerclient"}
