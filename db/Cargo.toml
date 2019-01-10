@@ -5,3 +5,5 @@ authors = ["root"]
 
 [dependencies]
 dockerclient = { path = "../dockerclient" }
+sha2 = "0.8.0"
+walkdir = "2.2.7"

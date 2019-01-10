@@ -15,8 +15,8 @@ pub enum Error {
     DefaultError(String),
 }
 
-type Container = shiplift::rep::Container;
-type Image = shiplift::rep::ImageDetails;
+pub type Container = shiplift::rep::Container;
+pub type Image = shiplift::rep::ImageDetails;
 pub struct DockerClient {
     inner_cli: shiplift::Docker,
 }
