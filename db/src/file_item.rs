@@ -4,23 +4,31 @@ use std::io;
 use std::io::{copy, Seek, SeekFrom};
 use std::path::Path;
 
+#[derive(Debug)]
 pub enum Error {
-    BadPath,
+    BadPath(String),
     IOError(io::Error),
 }
 
 pub struct FileItem<'a> {
     path: &'a Path,
     f: File,
+    id: String,
 }
 
 impl<'a> FileItem<'a> {
     pub fn new(path: &'a Path) -> Result<Self, Error> {
-        if path.is_file() && path.exists() {
-            return Err(Error::BadPath);
+        if !path.is_file() || !path.exists() {
+            return Err(Error::BadPath(path.display().to_string()));
         }
         let f = File::open(path).map_err(Error::IOError)?;
-        Ok(FileItem { path, f })
+        let id = path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_owned()
+            .to_string();
+        Ok(FileItem { path, f, id })
     }
 }
 
@@ -31,12 +39,11 @@ impl<'a> crate::Item for FileItem<'a> {
         copy(&mut self.f, &mut hasher).unwrap();
         hasher.result().to_vec()
     }
-    fn id(&self) -> String {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn srcpath(&self) -> &Path {
         self.path
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .to_owned()
-            .to_string()
     }
 }

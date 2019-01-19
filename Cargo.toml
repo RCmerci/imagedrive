@@ -7,3 +7,5 @@ edition = "2018"
 [dependencies]
 db = { path = "db" }
 dockerclient = { path = "dockerclient"}
+front = { path = "front" }
+clap = "2.32.0"

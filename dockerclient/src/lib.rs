@@ -2,9 +2,7 @@ extern crate shiplift;
 extern crate tokio;
 extern crate tokio_core;
 
-use std::sync::mpsc::channel;
-use tokio::prelude::future::ok;
-use tokio::prelude::{Future, Stream};
+use tokio::prelude::Future;
 
 #[derive(Debug)]
 pub enum Error {
@@ -12,6 +10,8 @@ pub enum Error {
     CommitError(String),
     CreateError(String),
     CopyError(String),
+    PushError(String),
+    LoginError(String),
     DefaultError(String),
 }
 
@@ -19,12 +19,33 @@ pub type Container = shiplift::rep::Container;
 pub type Image = shiplift::rep::ImageDetails;
 pub struct DockerClient {
     inner_cli: shiplift::Docker,
+    server: Option<String>,
+    username: Option<String>,
+    password: Option<String>,
 }
 
 impl DockerClient {
     pub fn new() -> Self {
         let inner_cli = shiplift::Docker::new();
-        DockerClient { inner_cli }
+        DockerClient {
+            inner_cli: inner_cli,
+            server: None,
+            username: None,
+            password: None,
+        }
+    }
+
+    pub fn new_with_logininfo(server: &str, username: &str, password: &str) -> Self {
+        let inner_cli = shiplift::Docker::new();
+        let server = Some(server.into());
+        let username = Some(username.into());
+        let password = Some(password.into());
+        DockerClient {
+            inner_cli,
+            server,
+            username,
+            password,
+        }
     }
 
     pub fn ps(&self, all: bool) -> Result<Vec<Container>, Error> {
@@ -58,28 +79,27 @@ impl DockerClient {
         tokio_core::reactor::Core::new().unwrap().run(fut)
     }
     /// Copy host file into container
-    pub fn copy_in<'a>(
+    pub fn copy_in(
         &self,
         container: &str,
         src: &std::path::Path,
         dst: &std::path::Path,
     ) -> Result<(), Error> {
-        let cmd = format!(
-            "docker cp {} {}:{}",
-            src.display(),
-            container,
-            dst.display()
-        );
-        let r = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(cmd)
-            .output()
-            .map_err(|e| Error::DefaultError(e.to_string()))?;
-        if !r.status.success() {
-            let errstr = String::from_utf8_lossy(&r.stderr).to_string();
-            return Err(Error::CopyError(errstr));
-        };
-        Ok(())
+        copy(container, true, src, dst)
+    }
+
+    pub fn copy_out(
+        &self,
+        container: &str,
+        src: &std::path::Path,
+        dst: &std::path::Path,
+    ) -> Result<(), Error> {
+        copy(container, false, src, dst)
+    }
+
+    pub fn remove_file(&self, container: &str, path: &std::path::Path) -> Result<(), Error> {
+        let cmd = format!("rm -rf {}", path.display());
+        self.exec(container, &cmd).map(|_| ())
     }
 
     pub fn create(&self, image: &str) -> Result<Container, Error> {
@@ -106,9 +126,8 @@ impl DockerClient {
                                 return Ok(c);
                             }
                         }
-                        // let e = format!("not found created container: {}", info.id);
-                        // Err(e)
-                        panic!("xxx")
+                        let e = format!("not found created container: {}", info.id);
+                        Err(Error::CreateError(e))
                     })
             });
         tokio_core::reactor::Core::new().unwrap().run(fut)
@@ -142,40 +161,13 @@ impl DockerClient {
     }
 
     pub fn exec(&self, container: &str, cmd: &str) -> Result<(Vec<u8>, Vec<u8>), Error> {
-        let (stdout_s, stdout_r) = channel();
-        let (stderr_s, stderr_r) = channel();
-        let fut = self
-            .inner_cli
-            .containers()
-            .get(container)
-            .exec(
-                &shiplift::ExecContainerOptions::builder()
-                    .cmd(vec!["sh", "-c", cmd])
-                    .attach_stdout(true)
-                    .attach_stderr(true)
-                    .build(),
-            )
-            .for_each(move |chunk| {
-                match chunk.stream_type {
-                    shiplift::tty::StreamType::StdOut => {
-                        stdout_s.send(chunk.data).unwrap();
-                    }
-                    shiplift::tty::StreamType::StdErr => {
-                        stderr_s.send(chunk.data).unwrap();
-                    }
-                    _ => panic!(""),
-                };
-                ok(())
-            })
-            .map_err(|e| Error::DefaultError(e.to_string()));
-        match tokio_core::reactor::Core::new().unwrap().run(fut) {
-            Err(e) => Err(e),
-            Ok(_) => {
-                let stdout: Vec<u8> = stdout_r.iter().flatten().collect();
-                let stderr: Vec<u8> = stderr_r.iter().flatten().collect();
-                Ok((stdout, stderr))
-            }
-        }
+        let cmd = format!("docker exec -i {} sh -c \"{}\"", container, cmd);
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(cmd)
+            .output()
+            .map(|r| (r.stdout, r.stderr))
+            .map_err(|e| Error::DefaultError(e.to_string()))
     }
 
     pub fn remove(&self, container: &str) -> Result<(), Error> {
@@ -204,6 +196,89 @@ impl DockerClient {
         let _ = self.remove(&c.id);
         Ok(())
     }
+
+    pub fn push(&self, image: &str) -> Result<(), Error> {
+        let cmd = format!("docker push {}", image);
+        let r = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&cmd)
+            .status()
+            .map_err(|e| Error::DefaultError(e.to_string()))?;
+        if r.success() {
+            return Ok(());
+        }
+        if !r.success()
+            && self.server.is_some()
+            && self.username.is_some()
+            && self.password.is_some()
+        {
+            let login_cmd = format!(
+                "docker login {} --username={}, --password={}",
+                self.server.as_ref().unwrap(),
+                self.username.as_ref().unwrap(),
+                self.password.as_ref().unwrap()
+            );
+            let output = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(login_cmd)
+                .output()
+                .map_err(|e| Error::DefaultError(e.to_string()))?;
+            if !output.status.success() {
+                let errstr = String::from_utf8_lossy(&output.stderr).to_string();
+                return Err(Error::LoginError(errstr));
+            }
+        } else if !r.success() {
+            return Err(Error::PushError(format!("code: {:?}", r.code())));
+        }
+
+        // login succ, retry push
+
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&cmd)
+            .output()
+            .map_err(|e| Error::DefaultError(e.to_string()))
+            .and_then(|r| {
+                if !r.status.success() {
+                    let errstr = String::from_utf8_lossy(&r.stderr).to_string();
+                    return Err(Error::PushError(errstr));
+                }
+                Ok(())
+            })
+    }
+}
+
+fn copy(
+    container: &str,
+    to_container: bool,
+    src: &std::path::Path,
+    dst: &std::path::Path,
+) -> Result<(), Error> {
+    let cmd = if to_container {
+        format!(
+            "docker cp {} {}:{}",
+            src.display(),
+            container,
+            dst.display()
+        )
+    } else {
+        format!(
+            "docker cp {}:{} {}",
+            container,
+            src.display(),
+            dst.display()
+        )
+    };
+    let r = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .output()
+        .map_err(|e| Error::DefaultError(e.to_string()))?;
+    if !r.status.success() {
+        let errstr = String::from_utf8_lossy(&r.stderr).to_string();
+        return Err(Error::CopyError(errstr));
+    };
+    Ok(())
 }
 
 #[cfg(test)]
@@ -259,7 +334,7 @@ mod tests {
         assert!(c_.is_ok());
         let c = c_.unwrap();
         cli.start(&c.id).unwrap();
-        let r_ = cli.exec(&c.id, "ls -l");
+        let r_ = cli.exec(&c.id, "ls");
         assert!(r_.is_ok());
         let r = r_.unwrap();
         let out: &[u8] = &r.0;
