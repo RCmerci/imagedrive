@@ -12,6 +12,7 @@ pub enum Error {
     CopyError(String),
     PushError(String),
     LoginError(String),
+    RemoveImageError(String),
     DefaultError(String),
 }
 
@@ -35,11 +36,15 @@ impl DockerClient {
         }
     }
 
-    pub fn new_with_logininfo(server: &str, username: &str, password: &str) -> Self {
+    pub fn new_with_logininfo(
+        server_: Option<&str>,
+        username_: Option<&str>,
+        password_: Option<&str>,
+    ) -> Self {
         let inner_cli = shiplift::Docker::new();
-        let server = Some(server.into());
-        let username = Some(username.into());
-        let password = Some(password.into());
+        let server = server_.map(String::from);
+        let username = username_.map(String::from);
+        let password = password_.map(String::from);
         DockerClient {
             inner_cli,
             server,
@@ -180,6 +185,20 @@ impl DockerClient {
         tokio_core::reactor::Core::new().unwrap().run(fut)
     }
 
+    pub fn remove_image(&self, image: &str) -> Result<(), Error> {
+        let cmd = format!("docker rmi {}", image);
+        let r = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(cmd)
+            .output()
+            .map_err(|e| Error::DefaultError(e.to_string()))?;
+        if !r.status.success() {
+            let errstr = String::from_utf8_lossy(&r.stderr).to_string();
+            return Err(Error::RemoveImageError(errstr));
+        }
+        Ok(())
+    }
+
     pub fn squash(&self, image: &str, new_image: &str) -> Result<(), Error> {
         let c = self.create(image)?;
         let cmd = format!("docker export {} | docker import - {}", &c.id, new_image);
@@ -197,13 +216,14 @@ impl DockerClient {
         Ok(())
     }
 
-    pub fn push(&self, image: &str) -> Result<(), Error> {
-        let cmd = format!("docker push {}", image);
+    pub fn pull(&self, image: &str) -> Result<(), Error> {
+        let cmd = format!("docker pull {}", image);
         let r = std::process::Command::new("sh")
             .arg("-c")
             .arg(&cmd)
             .status()
             .map_err(|e| Error::DefaultError(e.to_string()))?;
+
         if r.success() {
             return Ok(());
         }
@@ -230,6 +250,54 @@ impl DockerClient {
         } else if !r.success() {
             return Err(Error::PushError(format!("code: {:?}", r.code())));
         }
+        // login succ, retry pull
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&cmd)
+            .output()
+            .map_err(|e| Error::DefaultError(e.to_string()))
+            .and_then(|r| {
+                if !r.status.success() {
+                    let errstr = String::from_utf8_lossy(&r.stderr).to_string();
+                    return Err(Error::PushError(errstr));
+                }
+                Ok(())
+            })
+    }
+
+    pub fn push(&self, image: &str) -> Result<(), Error> {
+        let cmd = format!("docker push {}", image);
+        let r = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&cmd)
+            .output()
+            .map_err(|e| Error::DefaultError(e.to_string()))?;
+        if r.status.success() {
+            return Ok(());
+        }
+        if (!r.status.success())
+            && self.server.is_some()
+            && self.username.is_some()
+            && self.password.is_some()
+        {
+            let login_cmd = format!(
+                "docker login {} --username={} --password={}",
+                self.server.as_ref().unwrap(),
+                self.username.as_ref().unwrap(),
+                self.password.as_ref().unwrap()
+            );
+            let output = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(login_cmd)
+                .output()
+                .map_err(|e| Error::DefaultError(e.to_string()))?;
+            if !output.status.success() {
+                let errstr = String::from_utf8_lossy(&output.stderr).to_string();
+                return Err(Error::LoginError(errstr));
+            }
+        } else if !r.status.success() {
+            return Err(Error::PushError(format!("code: {:?}", r.status.code())));
+        }
 
         // login succ, retry push
 
@@ -245,6 +313,11 @@ impl DockerClient {
                 }
                 Ok(())
             })
+    }
+
+    /// return true if container's content is different with its image.
+    pub fn diff_container_image_content(&self, _container: &str) -> bool {
+        true
     }
 }
 

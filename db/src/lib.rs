@@ -42,4 +42,6 @@ where
     /// sync local DB to remote DB
     /// or sync remote DB to local DB if localDB not exists
     fn sync(&self) -> Result<(), E>;
+    /// sync remote DB to local DB even localDB exists, so it will overwrite localDB
+    fn sync_from_remote(&self) -> Result<(), E>;
 }

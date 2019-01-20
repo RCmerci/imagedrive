@@ -23,7 +23,11 @@ pub struct ImageDrive {
 
 impl ImageDrive {
     pub fn new(image_name: &str, server: &str, username: &str, password: &str) -> ImageDrive {
-        let dockercli = dockerclient::DockerClient::new_with_logininfo(server, username, password);
+        let dockercli = dockerclient::DockerClient::new_with_logininfo(
+            Some(server),
+            Some(username),
+            Some(password),
+        );
         ImageDrive {
             image_name: image_name.to_string(),
             dockercli: dockercli,
@@ -138,8 +142,30 @@ impl DB<Error> for ImageDrive {
         // TODO: check image exist, if not , pull from registry
 
         // image existed, so push to registry
+
+        // 1. commit all changed data in container to image
+        let c = get_or_run(&self.dockercli, &self.image_name)?;
+        if self.dockercli.diff_container_image_content(&c.id) {
+            let _ = self
+                .dockercli
+                .commit(&c.id, "commit by sync", &self.image_name)
+                .map_err(Error::DockerError)?;
+        }
+
+        // 2. push image
         self.dockercli
             .push(&self.image_name)
+            .map_err(Error::DockerError)
+    }
+
+    fn sync_from_remote(&self) -> Result<(), Error> {
+        let _ = self
+            .dockercli
+            .remove_image(&self.image_name)
+            .map_err(Error::DockerError);
+
+        self.dockercli
+            .pull(&self.image_name)
             .map_err(Error::DockerError)
     }
 }

@@ -46,12 +46,19 @@ pub fn put(db: &ImageDrive, entry: &str, item: &str) {
 pub fn export(db: &ImageDrive, entry: &str, dstdir: &str) {
     match db.export_to_dir(Path::new(dstdir), entry) {
         Err(e) => println!("export entry fail: {:?}", e),
-        Ok(r) => println!("{:?}", r),
+        Ok(_) => println!("export entry '{}' successfully", entry),
     }
 }
 
-pub fn sync(db: &ImageDrive) {
-    db.sync();
+pub fn sync(db: &ImageDrive, from_remote: bool) {
+    match if from_remote {
+        db.sync_from_remote()
+    } else {
+        db.sync()
+    } {
+        Err(e) => println!("sync fail: {:?}", e),
+        Ok(_) => println!("sync localDB to remoteDB successfully"),
+    }
 }
 
 #[cfg(test)]
