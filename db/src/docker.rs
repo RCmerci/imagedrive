@@ -1,14 +1,16 @@
+use crate::utils::get_or_run;
 use crate::*;
+use hex;
 use std::fmt;
-use std::ops::DerefMut;
 use std::path::Path;
 #[derive(Debug)]
 pub enum Error {
+    NotExistItem(String),
     NotFoundEntry(String),
     DockerError(dockerclient::Error),
     ExecError(String),
-    FileItemError(file_item::Error),
-    DirItemError(dir_item::Error),
+    HostItemError(hostitem::Error),
+    ContainerItemError(containeritem::Error),
 }
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -54,13 +56,12 @@ impl DB<Error> for ImageDrive {
     }
 
     fn add(&self, entry: &str, itempath: &Path) -> Result<AddResult, Error> {
-        let mut item: Box<Item> = if itempath.is_file() {
-            Box::new(file_item::FileItem::new(itempath).map_err(Error::FileItemError)?)
-        } else {
-            Box::new(dir_item::DirItem::new(itempath).map_err(Error::DirItemError)?)
-        };
+        if !itempath.exists() {
+            return Err(Error::NotExistItem(format!("{}", itempath.display())));
+        }
+        let mut item = hostitem::HostItem::new(itempath).map_err(Error::HostItemError)?;
 
-        let c = get_or_run(&self.dockercli, &self.image_name)?;
+        let c = get_or_run(&self.dockercli, &self.image_name).map_err(Error::DockerError)?;
         let path = Path::new("/data").join(entry);
         let ls_entry = format!(
             "mkdir -p {} && ls {}",
@@ -83,55 +84,58 @@ impl DB<Error> for ImageDrive {
                 let items: Vec<&str> = if out.trim() == "" {
                     vec![]
                 } else {
-                    out.trim().split(" ").collect()
+                    out.trim().split_whitespace().collect()
                 };
                 let mut ps = vec![];
                 let mut fileitems = vec![];
-                let mut diritems = vec![];
                 for item in items {
-                    ps.push(Path::new("/data").join(item));
+                    ps.push(Path::new("/data").join(entry).join(item));
                 }
                 for p in &ps {
-                    if p.is_file() {
-                        fileitems.push(file_item::FileItem::new(&p).map_err(Error::FileItemError)?);
-                    } else {
-                        diritems.push(dir_item::DirItem::new(&p).map_err(Error::DirItemError)?);
-                    };
+                    fileitems.push(
+                        containeritem::ContainerItem::new(&p, &self.dockercli, &self.image_name)
+                            .map_err(Error::ContainerItemError)?,
+                    );
                 }
 
                 for mut fi in fileitems {
-                    if compare_items(&mut fi, item.deref_mut()) {
+                    if compare_items(&mut fi, &mut item) {
                         return Ok(AddResult::ExistedItem(fi.id().into()));
-                    }
-                }
-                for mut di in diritems {
-                    if compare_items(&mut di, item.deref_mut()) {
-                        return Ok(AddResult::ExistedItem(di.id().into()));
                     }
                 }
                 let dstpath = Path::new("/data").join(entry).join(item.id());
                 self.dockercli
                     .copy_in(&c.id, item.srcpath(), &dstpath)
                     .map_err(Error::DockerError)?;
+
+                self.dockercli
+                    .exec(
+                        &c.id,
+                        &format!(
+                            "mkdir -p {} && echo {} > {}",
+                            Path::new("/checksum")
+                                .join(dstpath.parent().unwrap().strip_prefix("/").unwrap())
+                                .display(),
+                            hex::encode(item.hash()),
+                            Path::new("/checksum")
+                                .join(dstpath.strip_prefix("/").unwrap())
+                                .display()
+                        ),
+                    )
+                    .expect("write checksum");
                 Ok(AddResult::Succ)
             })
     }
-    fn delete(&self, entry: &str, itempath: &Path) -> Result<(), Error> {
-        let item: Box<Item> = if itempath.is_file() {
-            Box::new(file_item::FileItem::new(itempath).map_err(Error::FileItemError)?)
-        } else {
-            Box::new(dir_item::DirItem::new(itempath).map_err(Error::DirItemError)?)
-        };
-
-        let c = get_or_run(&self.dockercli, &self.image_name)?;
-        let dstpath = Path::new("/data").join(entry).join(item.id());
+    fn delete(&self, entry: &str, item: &str) -> Result<(), Error> {
+        let c = get_or_run(&self.dockercli, &self.image_name).map_err(Error::DockerError)?;
+        let dstpath = Path::new("/data").join(entry).join(item);
         self.dockercli
             .remove_file(&c.id, &dstpath)
             .map_err(|e| Error::ExecError(format!("{:?}", e)))
     }
 
     fn export_to_dir(&self, dir: &Path, entry: &str) -> Result<(), Error> {
-        let c = get_or_run(&self.dockercli, &self.image_name)?;
+        let c = get_or_run(&self.dockercli, &self.image_name).map_err(Error::DockerError)?;
         let srcpath = Path::new("/data").join(entry);
         self.dockercli
             .copy_out(&c.id, &srcpath, dir)
@@ -144,7 +148,7 @@ impl DB<Error> for ImageDrive {
         // image existed, so push to registry
 
         // 1. commit all changed data in container to image
-        let c = get_or_run(&self.dockercli, &self.image_name)?;
+        let c = get_or_run(&self.dockercli, &self.image_name).map_err(Error::DockerError)?;
         if self.dockercli.diff_container_image_content(&c.id) {
             let _ = self
                 .dockercli
@@ -170,26 +174,8 @@ impl DB<Error> for ImageDrive {
     }
 }
 
-fn get_or_run(
-    cli: &dockerclient::DockerClient,
-    image: &str,
-) -> Result<dockerclient::Container, Error> {
-    let cs = cli.ps(false).map_err(Error::DockerError)?;
-    for c in cs {
-        if c.image.split(":").collect::<Vec<&str>>()[0]
-            == image.split(":").collect::<Vec<&str>>()[0]
-        {
-            return Ok(c);
-        }
-    }
-    // not found
-    let c = cli.create(image).map_err(Error::DockerError)?;
-    cli.start(&c.id).map_err(Error::DockerError)?;
-    Ok(c)
-}
-
 fn ls(cli: &dockerclient::DockerClient, image: &str, dir: &Path) -> Result<Vec<String>, Error> {
-    let c = get_or_run(cli, image)?;
+    let c = get_or_run(cli, image).map_err(Error::DockerError)?;
     cli.exec(&c.id, &format!("ls {}", dir.display()))
         .map_err(Error::DockerError)
         .map(|(out, err)| {
@@ -205,7 +191,7 @@ fn ls(cli: &dockerclient::DockerClient, image: &str, dir: &Path) -> Result<Vec<S
             if out.trim() == "" {
                 return Ok(vec![]);
             }
-            let dirs: Vec<&str> = out.trim().split(" ").collect();
+            let dirs: Vec<&str> = out.trim().split_whitespace().collect();
             let mut r = vec![];
             for dir in dirs {
                 r.push(dir.trim().to_owned().to_string());

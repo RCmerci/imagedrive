@@ -241,6 +241,7 @@ name = "db"
 version = "0.1.0"
 dependencies = [
  "dockerclient 0.1.0",
+ "hex 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "sha2 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "walkdir 2.2.7 (registry+https://github.com/rust-lang/crates.io-index)",
 ]

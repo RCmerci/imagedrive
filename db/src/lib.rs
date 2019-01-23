@@ -1,16 +1,18 @@
 extern crate dockerclient;
+extern crate hex;
 extern crate sha2;
 extern crate walkdir;
 
-mod dir_item;
+mod containeritem;
 pub mod docker;
-mod file_item;
+mod hostitem;
+mod utils;
 pub trait Item {
     /// Hash compute item's hash value
     fn hash(&mut self) -> Vec<u8>;
     /// id is Item's unqiue name
     fn id(&self) -> &str;
-    /// path is item's host path
+    /// path is item's path
     fn srcpath(&self) -> &std::path::Path;
 }
 
@@ -36,7 +38,7 @@ where
     /// add `item` to DB under `entry`
     fn add(&self, entry: &str, itempath: &std::path::Path) -> Result<AddResult, E>;
     /// delete item from DB, which is located by entry and reference
-    fn delete(&self, entry: &str, itempath: &std::path::Path) -> Result<(), E>;
+    fn delete(&self, entry: &str, item: &str) -> Result<(), E>;
     /// export_to_dir export `entry` to `dir`
     fn export_to_dir(&self, dir: &std::path::Path, entry: &str) -> Result<(), E>;
     /// sync local DB to remote DB
