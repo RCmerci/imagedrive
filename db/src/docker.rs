@@ -1,4 +1,4 @@
-use crate::utils::get_or_run;
+use crate::utils::{get_or_run, run};
 use crate::*;
 use hex;
 use std::fmt;
@@ -35,6 +35,34 @@ impl ImageDrive {
             dockercli: dockercli,
         }
     }
+    // cat /checksum/data/*/* | sort
+    fn get_checksum_str(&self, container: &str) -> String {
+        let cmd = "cat /checksum/data/*/* | sort";
+        self.dockercli
+            .exec(container, cmd)
+            .map_err(Error::DockerError)
+            .map(|(out, err)| {
+                (
+                    String::from_utf8_lossy(&out).to_owned().to_string(),
+                    String::from_utf8_lossy(&err).to_owned().to_string(),
+                )
+            })
+            .and_then(|(out, err)| {
+                if err != "" {
+                    return Err(Error::ExecError(err));
+                }
+                Ok(out.trim().to_owned())
+            })
+            .expect("get checksum")
+    }
+    // diff_container_with_image return true if different
+    fn diff_container_with_image(&self) -> bool {
+        let c = get_or_run(&self.dockercli, &self.image_name).expect("get or run");
+        let image_c = run(&self.dockercli, &self.image_name).expect("run");
+        let c_checksum = self.get_checksum_str(&c.id);
+        let image_c_checksum = self.get_checksum_str(&image_c.id);
+        c_checksum != image_c_checksum
+    }
 }
 
 impl fmt::Display for ImageDrive {
@@ -55,11 +83,11 @@ impl DB<Error> for ImageDrive {
         )
     }
 
-    fn add(&self, entry: &str, itempath: &Path) -> Result<AddResult, Error> {
+    fn add(&self, entry: &str, itempath: &Path, rename: Option<&str>) -> Result<AddResult, Error> {
         if !itempath.exists() {
             return Err(Error::NotExistItem(format!("{}", itempath.display())));
         }
-        let mut item = hostitem::HostItem::new(itempath).map_err(Error::HostItemError)?;
+        let mut item = hostitem::HostItem::new(itempath, rename).map_err(Error::HostItemError)?;
 
         let c = get_or_run(&self.dockercli, &self.image_name).map_err(Error::DockerError)?;
         let path = Path::new("/data").join(entry);
@@ -126,9 +154,12 @@ impl DB<Error> for ImageDrive {
                 Ok(AddResult::Succ)
             })
     }
-    fn delete(&self, entry: &str, item: &str) -> Result<(), Error> {
+    fn delete(&self, entry: &str, item: Option<&str>) -> Result<(), Error> {
         let c = get_or_run(&self.dockercli, &self.image_name).map_err(Error::DockerError)?;
-        let dstpath = Path::new("/data").join(entry).join(item);
+        let dstpath = match item {
+            None => Path::new("/data").join(entry),
+            Some(file) => Path::new("/data").join(entry).join(file),
+        };
         self.dockercli
             .remove_file(&c.id, &dstpath)
             .map_err(|e| Error::ExecError(format!("{:?}", e)))
@@ -143,13 +174,10 @@ impl DB<Error> for ImageDrive {
     }
 
     fn sync(&self) -> Result<(), Error> {
-        // TODO: check image exist, if not , pull from registry
-
-        // image existed, so push to registry
-
         // 1. commit all changed data in container to image
         let c = get_or_run(&self.dockercli, &self.image_name).map_err(Error::DockerError)?;
-        if self.dockercli.diff_container_image_content(&c.id) {
+        if self.diff_container_with_image() {
+            println!("something changed in localDB , so need to sync to remote");
             let _ = self
                 .dockercli
                 .commit(&c.id, "commit by sync", &self.image_name)

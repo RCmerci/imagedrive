@@ -18,15 +18,18 @@ pub struct HostItem<'a> {
 }
 
 impl<'a> HostItem<'a> {
-    pub fn new(path: &'a Path) -> Result<Self, Error> {
-        let mut filename = "".into();
+    pub fn new(path: &'a Path, rename: Option<&str>) -> Result<Self, Error> {
+        let filename;
         match path.file_name() {
             None => {
                 return Err(Error::BadPath(path.display().to_string()));
             }
             Some(s) => filename = s.to_string_lossy().to_owned(),
         }
-        let id = format!("{:?}", filename);
+        let mut id = format!("{:?}", filename);
+        if rename.is_some() {
+            id = format!("{:?}", rename.unwrap())
+        }
         let mut fs = vec![];
         // host file or dir
         if path.is_file() {

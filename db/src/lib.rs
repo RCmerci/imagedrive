@@ -36,9 +36,14 @@ where
     /// items list items under `entry`
     fn items(&self, entry: &str) -> Result<Vec<String>, E>;
     /// add `item` to DB under `entry`
-    fn add(&self, entry: &str, itempath: &std::path::Path) -> Result<AddResult, E>;
+    fn add(
+        &self,
+        entry: &str,
+        itempath: &std::path::Path,
+        rename: Option<&str>,
+    ) -> Result<AddResult, E>;
     /// delete item from DB, which is located by entry and reference
-    fn delete(&self, entry: &str, item: &str) -> Result<(), E>;
+    fn delete(&self, entry: &str, item: Option<&str>) -> Result<(), E>;
     /// export_to_dir export `entry` to `dir`
     fn export_to_dir(&self, dir: &std::path::Path, entry: &str) -> Result<(), E>;
     /// sync local DB to remote DB

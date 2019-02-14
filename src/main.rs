@@ -36,7 +36,8 @@ fn main() {
             SubCommand::with_name("put")
                 .about("put host file to imagedrive")
                 .arg(Arg::with_name("entry").help("entry name").required(true))
-                .arg(Arg::with_name("file").help("file path").required(true)),
+                .arg(Arg::with_name("file").help("file path").required(true))
+                .arg(Arg::with_name("name").help("rename file")),
         )
         .subcommand(
             SubCommand::with_name("export")
@@ -54,9 +55,15 @@ fn main() {
                         .long("remote"),
                 ),
         )
+        .subcommand(
+            SubCommand::with_name("rm")
+                .about("remove entry or file")
+                .arg(Arg::with_name("entry").help("entry name").required(true))
+                .arg(Arg::with_name("file").help("file name")),
+        )
         .get_matches();
 
-    let mut config_path = None;
+    let mut config_path;
     if matches.is_present("config") {
         config_path = Some(std::path::Path::new(matches.value_of("config").unwrap()).to_path_buf());
     } else {
@@ -79,7 +86,6 @@ fn main() {
     let image_name = &cfg.image_name;
 
     if let Some(matches) = matches.subcommand_matches("ls") {
-        // "$ myapp test" was run
         if matches.is_present("entry") {
             front::list_entry_item(
                 &ImageDrive::new(image_name, server, username, password),
@@ -88,19 +94,17 @@ fn main() {
         } else {
             front::list_entry(&ImageDrive::new(image_name, server, username, password));
         }
-    }
-
-    if let Some(matches) = matches.subcommand_matches("put") {
+    } else if let Some(matches) = matches.subcommand_matches("put") {
         let entry = matches.value_of("entry").unwrap();
         let filepath = matches.value_of("file").unwrap();
+        let rename = matches.value_of("name");
         front::put(
             &ImageDrive::new(image_name, server, username, password),
             entry,
             filepath,
+            rename,
         );
-    }
-
-    if let Some(matches) = matches.subcommand_matches("export") {
+    } else if let Some(matches) = matches.subcommand_matches("export") {
         let entry = matches.value_of("entry").unwrap();
         let filepath = matches.value_of("dir").unwrap();
         front::export(
@@ -108,14 +112,21 @@ fn main() {
             entry,
             filepath,
         );
-    }
-
-    if let Some(matches) = matches.subcommand_matches("sync") {
+    } else if let Some(matches) = matches.subcommand_matches("sync") {
         front::sync(
             &ImageDrive::new(image_name, server, username, password),
             matches.is_present("from_remote"),
         );
+    } else if let Some(matches) = matches.subcommand_matches("rm") {
+        let entry = matches.value_of("entry").unwrap();
+        let file = matches.value_of("file");
+        front::rm(
+            &ImageDrive::new(image_name, server, username, password),
+            entry,
+            file,
+        );
+    } else {
+        // default
+        front::list_entry(&ImageDrive::new(image_name, server, username, password));
     }
-
-    // Continued program logic goes here...
 }

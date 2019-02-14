@@ -36,8 +36,8 @@ pub fn list_entry_item(db: &ImageDrive, entry: &str) {
     }
 }
 
-pub fn put(db: &ImageDrive, entry: &str, item: &str) {
-    match db.add(entry, Path::new(item)) {
+pub fn put(db: &ImageDrive, entry: &str, item: &str, rename: Option<&str>) {
+    match db.add(entry, Path::new(item), rename) {
         Err(e) => println!("put item fail: {:?}", e),
         Ok(r) => println!("{:?}", r),
     }
@@ -58,6 +58,13 @@ pub fn sync(db: &ImageDrive, from_remote: bool) {
     } {
         Err(e) => println!("sync fail: {:?}", e),
         Ok(_) => println!("sync localDB to remoteDB successfully"),
+    }
+}
+
+pub fn rm(db: &ImageDrive, entry: &str, file: Option<&str>) {
+    match db.delete(entry, file) {
+        Err(e) => println!("rm entry (or file) fail: {:?}", e),
+        Ok(_) => println!("rm [{:?}]", entry.to_owned() + "/" + file.unwrap_or("")),
     }
 }
 

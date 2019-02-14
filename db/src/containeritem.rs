@@ -22,7 +22,7 @@ impl<'a, 'b> ContainerItem<'a, 'b> {
         dockercli: &'b dockerclient::DockerClient,
         image: &str,
     ) -> Result<Self, Error> {
-        let mut filename = "".into();
+        let filename;
         match path.file_name() {
             None => {
                 return Err(Error::BadPath(path.display().to_string()));

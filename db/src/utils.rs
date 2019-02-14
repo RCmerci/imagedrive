@@ -17,3 +17,11 @@ pub fn get_or_run(
     cli.start(&c.id)?;
     Ok(c)
 }
+pub fn run(
+    cli: &dockerclient::DockerClient,
+    image: &str,
+) -> Result<dockerclient::Container, dockerclient::Error> {
+    let c = cli.create(image)?;
+    cli.start(&c.id)?;
+    Ok(c)
+}

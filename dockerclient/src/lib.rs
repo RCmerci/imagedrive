@@ -265,17 +265,21 @@ impl DockerClient {
             })
     }
 
+    // it maybe long duration, so print docker push's processing stdout
     pub fn push(&self, image: &str) -> Result<(), Error> {
         let cmd = format!("docker push {}", image);
-        let r = std::process::Command::new("sh")
+        let mut r = std::process::Command::new("sh")
             .arg("-c")
             .arg(&cmd)
-            .output()
+            .stderr(std::process::Stdio::null())
+            .stdout(std::process::Stdio::inherit())
+            .spawn()
             .map_err(|e| Error::DefaultError(e.to_string()))?;
-        if r.status.success() {
+        let status = r.wait().map_err(|e| Error::DefaultError(e.to_string()))?;
+        if status.success() {
             return Ok(());
         }
-        if (!r.status.success())
+        if (!status.success())
             && self.server.is_some()
             && self.username.is_some()
             && self.password.is_some()
@@ -295,8 +299,8 @@ impl DockerClient {
                 let errstr = String::from_utf8_lossy(&output.stderr).to_string();
                 return Err(Error::LoginError(errstr));
             }
-        } else if !r.status.success() {
-            return Err(Error::PushError(format!("code: {:?}", r.status.code())));
+        } else if !status.success() {
+            return Err(Error::PushError(format!("code: {:?}", status.code())));
         }
 
         // login succ, retry push
@@ -304,20 +308,20 @@ impl DockerClient {
         std::process::Command::new("sh")
             .arg("-c")
             .arg(&cmd)
-            .output()
-            .map_err(|e| Error::DefaultError(e.to_string()))
+            .stderr(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::inherit())
+            .spawn()
+            .map_err(|e| Error::PushError(e.to_string()))
             .and_then(|r| {
-                if !r.status.success() {
-                    let errstr = String::from_utf8_lossy(&r.stderr).to_string();
+                let output = r
+                    .wait_with_output()
+                    .map_err(|e| Error::PushError(e.to_string()))?;
+                if !output.status.success() {
+                    let errstr = String::from_utf8_lossy(&output.stderr).to_string();
                     return Err(Error::PushError(errstr));
                 }
                 Ok(())
             })
-    }
-
-    /// return true if container's content is different with its image.
-    pub fn diff_container_image_content(&self, _container: &str) -> bool {
-        true
     }
 }
 
