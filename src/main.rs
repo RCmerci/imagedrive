@@ -15,7 +15,7 @@ fn main() {
                 .short("c")
                 .long("config")
                 .value_name("FILE")
-                .help("Sets a custom config file")
+                .help("Sets a custom config file, default: ~/.imagedrive")
                 .takes_value(true),
         )
         .arg(
